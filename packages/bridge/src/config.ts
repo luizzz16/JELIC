@@ -7,19 +7,22 @@ function required(name: string): string {
   return v;
 }
 
-const prefix = required("TOPIC_PREFIX");
+const base = `smartlock/${required("DEVICE_ID")}`;
 
 export const config = {
   mqttUrl: required("MQTT_URL"),
   mqttUsername: process.env.MQTT_USERNAME || undefined,
   mqttPassword: process.env.MQTT_PASSWORD || undefined,
-  prefix,
+  base,
   port: Number(process.env.PORT ?? 3000),
   historyLimit: 200,
 };
 
-/** ESP32 publishes: <prefix>/events (tampering|person_detected) and <prefix>/lock/state (open|closed). */
+/** Same topics as the ESP32 firmware. */
 export const topics = {
-  events: `${prefix}/events`,
-  state: `${prefix}/lock/state`,
+  status: `${base}/status`, // retained JSON
+  event: `${base}/event`,
+  alert: `${base}/alert`,
+  online: `${base}/online`, // retained, LWT: online | offline
+  command: `${base}/cmd`, // web -> ESP32
 };

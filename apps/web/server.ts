@@ -9,7 +9,6 @@ const port = Number(process.env.PORT ?? 3000);
 const app = next({ dev, dir: import.meta.dirname });
 const handle = app.getRequestHandler();
 await app.prepare();
-const upgradeNext = app.getUpgradeHandler();
 const bridge = createBridge();
 
 const server = createServer((req, res) => {
@@ -19,8 +18,17 @@ const server = createServer((req, res) => {
   }
   void handle(req, res);
 });
-server.on("upgrade", (req, socket, head) => {
-  if (req.url?.split("?")[0] === "/ws") bridge.handleUpgrade(req, socket, head);
-  else void upgradeNext(req, socket, head); // keeps Next HMR working in dev
-});
+// Next attaches its own "upgrade" listener on the first HTTP request (HMR in dev), so we must NOT call
+// its upgrade handler ourselves (double handling breaks HMR). We only claim /ws and hide it from Next.
+const emit = server.emit.bind(server);
+server.emit = ((event: string, ...args: unknown[]) => {
+  if (event === "upgrade") {
+    const [req, socket, head] = args as Parameters<typeof bridge.handleUpgrade>;
+    if (req.url?.split("?")[0] === "/ws") {
+      bridge.handleUpgrade(req, socket, head);
+      return true;
+    }
+  }
+  return emit(event, ...args);
+}) as typeof server.emit;
 server.listen(port, () => console.log(`[web] http://localhost:${port} (integrated, ws at /ws)`));

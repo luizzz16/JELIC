@@ -1,4 +1,6 @@
 "use client";
+import { useEffect, useState } from "react";
+import type { LockCommand } from "@jelic/shared";
 import { useLock, type Link, type LogItem } from "../lib/useLock";
 
 const LINK_LABEL: Record<Link, string> = {
@@ -18,18 +20,54 @@ function Padlock({ open }: { open: boolean }) {
   );
 }
 
+const EVENT_TEXT: Record<string, { title: string; tone: string }> = {
+  presence_detected: { title: "Persona detectada", tone: "info" },
+  presence_cleared: { title: "Ya no hay presencia", tone: "idle" },
+  door_open: { title: "Puerta abierta", tone: "warn" },
+  door_closed: { title: "Puerta cerrada", tone: "ok" },
+  vibration: { title: "Vibración fuerte", tone: "warn" },
+  door_forced: { title: "Puerta forzada", tone: "bad" },
+  tamper_vibration: { title: "Forcejeo detectado", tone: "bad" },
+  lock_rejected: { title: "Cierre rechazado: puerta abierta", tone: "warn" },
+  alarm_test: { title: "Prueba de alarma", tone: "info" },
+  alarm_silenced: { title: "Alarma silenciada", tone: "idle" },
+  latch_locking: { title: "Cerrando pestillo…", tone: "idle" },
+  latch_unlocking: { title: "Abriendo pestillo…", tone: "idle" },
+  latch_confirmed: { title: "Pestillo confirmado", tone: "ok" },
+  device_online: { title: "Dispositivo conectado", tone: "ok" },
+  cmd_rejected: { title: "Comando rechazado", tone: "warn" },
+};
+
+/** Firmware answers a LOCK/UNLOCK with one of these once the servo finished (or refused). */
+const DONE = new Set(["latch_confirmed", "lock_rejected", "cmd_rejected"]);
+const MOVE_TIMEOUT_MS = 5000;
+
+const FEEDBACK = new Set(["latch_locking", "latch_unlocking", "latch_confirmed", "lock_rejected", "cmd_rejected"]);
+
 function describe(i: LogItem): { title: string; tone: string } {
-  if (i.kind === "state")
-    return { title: i.state === "open" ? "Pestillo abierto" : "Pestillo cerrado", tone: i.state === "open" ? "warn" : "ok" };
-  return i.type === "tampering"
-    ? { title: "Forcejeo detectado", tone: "bad" }
-    : { title: "Persona detectada", tone: "info" };
+  return EVENT_TEXT[i.type] ?? { title: i.type, tone: i.channel === "alert" ? "bad" : "info" };
 }
 
 export default function Page() {
-  const { state, link, log } = useLock();
-  const tone = state === "open" ? "warn" : state === "closed" ? "ok" : "idle";
-  const alerts = log.filter((l) => l.kind === "event" && l.type === "tampering").length;
+  const { status, online, link, log, sendCommand } = useLock();
+  const canSend = link === "live" && online;
+  const unlocked = status?.latch === "unlocked";
+  const tone = !status ? "idle" : status.alarm ? "bad" : unlocked ? "warn" : "ok";
+  const feedback = log.map((i) => ({ ...describe(i), type: i.type, ts: i.ts })).find((i) => FEEDBACK.has(i.type));
+  const alerts = log.filter((l) => l.channel === "alert").length;
+
+  // Servo moves ~1 s (smooth sweep): show "moving" until the device confirms, with a timeout fallback.
+  const doneCount = log.filter((l) => DONE.has(l.type)).length;
+  const [pending, setPending] = useState<{ action: LockCommand; done: number } | null>(null);
+  const moving = pending && doneCount === pending.done ? pending.action : null;
+  useEffect(() => {
+    if (!pending) return;
+    const t = setTimeout(() => setPending(null), MOVE_TIMEOUT_MS);
+    return () => clearTimeout(t);
+  }, [pending]);
+  const move = (action: "LOCK" | "UNLOCK") => {
+    if (sendCommand(action)) setPending({ action, done: doneCount });
+  };
 
   return (
     <main>
@@ -39,13 +77,26 @@ export default function Page() {
       </header>
 
       <section className={`hero ${tone}`}>
-        <div className="ring"><Padlock open={state === "open"} /></div>
-        <strong>{state === "open" ? "Abierto" : state === "closed" ? "Cerrado" : "Sin datos"}</strong>
+        <div className="ring"><Padlock open={unlocked} /></div>
+        <strong>{!status ? "Sin datos" : status.alarm ? "¡Alarma!" : unlocked ? "Abierto" : "Cerrado"}</strong>
+        <small className="sub">{online ? "Dispositivo en línea" : "Dispositivo sin conexión"}</small>
       </section>
 
+      <div className="actions">
+        <button className="open" disabled={!canSend || !!moving} onClick={() => move("UNLOCK")}>{moving === "UNLOCK" ? "Abriendo…" : "Abrir"}</button>
+        <button className="close" disabled={!canSend || !!moving} onClick={() => move("LOCK")}>{moving === "LOCK" ? "Cerrando…" : "Cerrar"}</button>
+        {status?.alarm && (
+          <button className="silence" disabled={!canSend} onClick={() => sendCommand("SILENCE")}>Silenciar alarma</button>
+        )}
+      </div>
+
+      {feedback && <p className={`feedback ${feedback.tone}`}>{feedback.title} <time>{new Date(feedback.ts).toLocaleTimeString()}</time></p>}
+
       <div className="stats">
-        <div><b>{log.length}</b><span>registros</span></div>
-        <div className={alerts ? "danger" : ""}><b>{alerts}</b><span>forcejeos</span></div>
+        <div><b>{status ? (status.door === "open" ? "Abierta" : "Cerrada") : "—"}</b><span>puerta</span></div>
+        <div><b>{status ? (status.presence ? "Sí" : "No") : "—"}</b><span>presencia</span></div>
+        <div className={alerts ? "danger" : ""}><b>{alerts}</b><span>alertas</span></div>
+        <div><b>{status ? `${status.rssi} dBm` : "—"}</b><span>Wi-Fi · SD {status?.sd ? "ok" : "no"}</span></div>
       </div>
 
       <section>

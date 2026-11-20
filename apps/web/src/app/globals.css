@@ -40,3 +40,18 @@ li.ok { --c:var(--ok); } li.warn { --c:var(--warn); } li.bad { --c:var(--bad); c
 @keyframes pulse { 50% { opacity:.35; } }
 @keyframes in { from { opacity:0; transform:translateY(-6px); } }
 @media (prefers-reduced-motion: reduce) { * { animation:none !important; transition:none !important; } }
+
+.actions { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:12px; }
+.actions button { font:inherit; font-weight:600; font-size:17px; padding:15px; border-radius:14px; border:1px solid var(--line); background:var(--card); color:var(--fg); cursor:pointer; transition:transform .1s,opacity .2s; }
+.actions button:active:not(:disabled) { transform:scale(.97); }
+.actions button:disabled { opacity:.4; cursor:not-allowed; }
+.actions .open { border-color:color-mix(in srgb,var(--warn) 50%,var(--line)); color:var(--warn); }
+.actions .close { border-color:color-mix(in srgb,var(--ok) 50%,var(--line)); color:var(--ok); }
+
+.hero.bad { --c:var(--bad); }
+.hero .sub { display:block; margin-top:6px; color:var(--mut); font-size:13px; }
+.stats b { font-size:20px; }
+.actions .silence { grid-column:1 / -1; border-color:color-mix(in srgb,var(--bad) 55%,var(--line)); color:var(--bad); }
+
+.feedback { margin:10px 2px 0; font-size:13px; color:var(--mut); display:flex; justify-content:space-between; }
+.feedback.warn { color:var(--warn); } .feedback.ok { color:var(--ok); }

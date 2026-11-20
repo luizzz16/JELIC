@@ -1,25 +1,33 @@
-import type { EventType, LockState } from "@jelic/shared";
+import type { DeviceStatus } from "@jelic/shared";
 
-/** Accepts plain text ("open") or JSON ({"state":"open"} / {"event":"tampering"}). */
-function unwrap(payload: string, key: string): string {
-  const raw = payload.trim();
-  if (raw.startsWith("{")) {
-    try {
-      const obj = JSON.parse(raw);
-      return String(obj[key] ?? obj.type ?? "").trim().toLowerCase();
-    } catch {
-      return "";
-    }
+function json(payload: string): Record<string, unknown> | null {
+  try {
+    const v = JSON.parse(payload);
+    return v && typeof v === "object" ? (v as Record<string, unknown>) : null;
+  } catch {
+    return null;
   }
-  return raw.replace(/^"|"$/g, "").toLowerCase();
 }
 
-export function parseState(payload: string): LockState | null {
-  const v = unwrap(payload, "state");
-  return v === "open" || v === "closed" ? v : null;
+export function parseStatus(payload: string): DeviceStatus | null {
+  const o = json(payload);
+  if (!o || (o.door !== "open" && o.door !== "closed") || (o.latch !== "locked" && o.latch !== "unlocked")) return null;
+  return {
+    device: String(o.device ?? ""),
+    door: o.door,
+    latch: o.latch,
+    presence: Boolean(o.presence),
+    alarm: Boolean(o.alarm),
+    rssi: Number(o.rssi ?? 0),
+    sd: Boolean(o.sd),
+    ts: String(o.ts ?? ""),
+  };
 }
 
-export function parseEvent(payload: string): EventType | null {
-  const v = unwrap(payload, "event");
-  return v === "tampering" || v === "person_detected" ? v : null;
+export function parseEventPayload(payload: string): { type: string; detail: string } | null {
+  const o = json(payload);
+  if (!o || typeof o.type !== "string") return null;
+  return { type: o.type, detail: String(o.detail ?? "") };
 }
+
+export const parseOnline = (payload: string) => payload.trim().toLowerCase() === "online";
