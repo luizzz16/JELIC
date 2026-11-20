@@ -44,6 +44,9 @@ button.plan { display:block; width:calc(100% + 44px); padding:0; border:0; borde
 button.plan:not(:disabled):hover { background-color:rgba(255,255,255,.05); }
 button.plan:not(:disabled):active { transform:none; }
 button.plan:disabled { opacity:.6; cursor:not-allowed; }
+button.plan.blocked { opacity:.55; cursor:not-allowed; }
+.notice { margin:0 -22px; padding:12px 22px; border-top:1px solid color-mix(in srgb, var(--open) 40%, transparent);
+  background:color-mix(in srgb, var(--open) 12%, var(--surface)); color:var(--open); font-size:13px; font-weight:500; text-align:center; }
 button.plan:focus-visible { outline:2px solid var(--state); outline-offset:-2px; }
 .hint { margin:0 -22px; padding:12px 22px 14px; border-top:1px solid var(--line); text-align:center; font-size:13px; color:var(--muted); }
 .hero + .section-title { margin-top:22px; }

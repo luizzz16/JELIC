@@ -15,6 +15,7 @@ export function useLock() {
   const [online, setOnline] = useState(false);
   const [link, setLink] = useState<Link>("connecting");
   const [log, setLog] = useState<LogItem[]>([]);
+  const [rejection, setRejection] = useState<{ n: number; reason: "door_open" } | null>(null);
   const wsRef = useRef<WebSocket | undefined>(undefined);
 
   useEffect(() => {
@@ -22,6 +23,7 @@ export function useLock() {
     let timer: ReturnType<typeof setTimeout>;
     let closed = false;
     let seq = 0;
+    let rejSeq = 0;
     const item = (e: DeviceEvent): LogItem => ({ ...e, id: `e${seq++}` });
     const push = (i: LogItem) => setLog((l) => [i, ...l].slice(0, MAX));
 
@@ -38,6 +40,7 @@ export function useLock() {
         } else if (m.kind === "status") setStatus(m.status);
         else if (m.kind === "online") setOnline(m.online);
         else if (m.kind === "event") push(item(m.event));
+        else if (m.kind === "rejected") setRejection({ n: ++rejSeq, reason: m.reason });
         else setLink(m.connected ? "live" : "broker-down");
       };
       ws.onclose = () => {
@@ -63,5 +66,5 @@ export function useLock() {
     return true;
   }, []);
 
-  return { status, online, link, log, sendCommand };
+  return { status, online, link, log, sendCommand, rejection };
 }

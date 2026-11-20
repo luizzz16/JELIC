@@ -43,6 +43,11 @@ export function createBridge(): Bridge {
         return;
       }
       if (msg.kind !== "command" || !COMMANDS.includes(msg.action)) return;
+      // El pestillo solo se mueve con la puerta cerrada (sensor magnético).
+      if ((msg.action === "LOCK" || msg.action === "UNLOCK") && status?.door === "open") {
+        send(ws, { kind: "rejected", action: msg.action, reason: "door_open" });
+        return console.warn(`[mqtt] ${msg.action} rejected, door is open`);
+      }
       if (!brokerUp) return console.warn("[mqtt] command dropped, broker down");
       client.publish(topics.command, msg.action, { qos: 1 });
       console.log(`[mqtt] command -> ${topics.command}: ${msg.action}`);

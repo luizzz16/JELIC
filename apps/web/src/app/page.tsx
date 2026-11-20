@@ -29,6 +29,7 @@ const LOCK_EVENTS = new Set(["latch_locking", "latch_unlocking", "latch_confirme
 /** Firmware answers a LOCK/UNLOCK with one of these once the servo finished (or refused). */
 const DONE = new Set(["latch_confirmed", "lock_rejected", "cmd_rejected"]);
 const MOVE_TIMEOUT_MS = 5000;
+const DOOR_OPEN_MSG = "No se puede mover el seguro con la puerta abierta. Ciérrala primero.";
 
 type AlertKey = "forcejeo" | "presencia" | "puerta";
 const ALERT_OF: Record<string, AlertKey> = {
@@ -75,7 +76,7 @@ const FIVE_MIN = 300e3;
 /* ---------- página ---------- */
 
 export default function Page() {
-  const { status, online, link, log, sendCommand } = useLock();
+  const { status, online, link, log, sendCommand, rejection } = useLock();
   const [now, setNow] = useState(() => Date.now());
   const [filter, setFilter] = useState<"all" | "alert" | "lock">("all");
   const [showAll, setShowAll] = useState(false);
@@ -89,6 +90,8 @@ export default function Page() {
   const canSend = link === "live" && online;
   const hasStatus = !!status;
   const locked = status?.latch === "locked";
+  /* la puerta se lee del sensor magnético (reed), independiente del pestillo */
+  const doorOpen = status?.door === "open";
 
   /* pestillo en movimiento: espera confirmación del dispositivo, con timeout */
   const doneCount = log.filter((l) => DONE.has(l.type)).length;
@@ -100,8 +103,23 @@ export default function Page() {
     return () => clearTimeout(t);
   }, [pending]);
   const move = (action: "LOCK" | "UNLOCK") => {
+    if (doorOpen) return setNotice(DOOR_OPEN_MSG); // el seguro solo se mueve con la puerta cerrada
     if (sendCommand(action)) setPending({ action, done: doneCount });
   };
+
+  /* aviso breve (p. ej. seguro bloqueado por puerta abierta) */
+  const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(null), 4000);
+    return () => clearTimeout(t);
+  }, [notice]);
+  /* el servidor también puede rechazar el comando si la puerta se abrió justo antes */
+  useEffect(() => {
+    if (!rejection) return;
+    setPending(null);
+    setNotice(DOOR_OPEN_MSG);
+  }, [rejection]);
 
   /* alertas agrupadas por tipo (última hora) */
   const alertTimes = useMemo(() => {
@@ -120,16 +138,19 @@ export default function Page() {
   let sec: { cls: "" | "warn" | "alert"; icon: React.ReactNode; title: string; text: string } = {
     cls: "", icon: <IconCalm />, title: "Todo en calma", text: "Sin eventos sospechosos",
   };
-  const alarmOn = !!status?.alarm;
+  /* sin conexión el último estado guardado puede ser viejo: no mostrar alarma pegada */
+  const alarmOn = online && !!status?.alarm;
   if (alarmOn || fresh("forcejeo", 120e3)) {
     sec = {
       cls: "alert", icon: <IconAlert />,
       title: alarmOn && !fresh("forcejeo", 120e3) ? "Alarma activa" : "Forcejeo detectado",
       text: last("forcejeo") ? `${ago(last("forcejeo"), now)}. La alarma puede estar sonando.` : "La alarma puede estar sonando.",
     };
-  } else if (status?.presence || fresh("presencia", 60e3)) {
+  } else if (online && status?.presence) {
+    /* solo el estado actual del PIR: presence_cleared del dispositivo lo apaga de inmediato */
     sec = { cls: "warn", icon: <IconUser />, title: "Alguien en la puerta", text: last("presencia") ? ago(last("presencia"), now) : "Hay alguien frente a la puerta" };
-  } else if (status?.door === "open" && fresh("puerta", 60e3)) {
+  } else if (online && doorOpen) {
+    /* mientras el sensor magnético diga abierta (no solo los primeros 60 s) */
     sec = { cls: "warn", icon: <IconWave />, title: "Puerta abierta", text: "Revisa si es esperado" };
   } else if (recent("forcejeo").length) {
     sec.text = `Último forcejeo ${ago(last("forcejeo"), now)} · atendido`;
@@ -154,11 +175,16 @@ export default function Page() {
   const bars = !online ? 0 : rssi > -55 ? 4 : rssi > -65 ? 3 : rssi > -75 ? 2 : 1;
   const signal = !online ? "Sin señal" : ["", "Débil", "Regular", "Buena", "Excelente"][bars];
 
-  const word = !hasStatus ? "Sin datos" : locked ? "Cerrado" : "Abierto";
+  const word = !hasStatus ? "Sin datos" : doorOpen ? "Abierto" : "Cerrado";
   const sub = !online
     ? "Dispositivo sin conexión"
-    : moving ? "Moviendo el seguro…" : locked ? "La puerta está asegurada" : "La puerta no tiene seguro";
-  const stateColor = !hasStatus ? "var(--muted)" : alarmOn ? "var(--alert)" : locked ? "var(--secure)" : "var(--open)";
+    : moving
+      ? "Moviendo el seguro…"
+      : doorOpen
+        ? locked ? "La puerta está abierta (el seguro sigue puesto)" : "La puerta está abierta"
+        : locked ? "La puerta está asegurada" : "La puerta está cerrada, sin seguro";
+  /* un solo color por estado de la puerta: abierta = ámbar, cerrada = verde (la alarma se ve en la tarjeta de Seguridad) */
+  const stateColor = !hasStatus ? "var(--muted)" : doorOpen ? "var(--open)" : "var(--secure)";
   const lk = LINK[link];
 
   return (
@@ -177,10 +203,11 @@ export default function Page() {
 
         <button
           type="button"
-          className="plan"
+          className={doorOpen ? "plan blocked" : "plan"}
+          aria-disabled={doorOpen}
           disabled={!canSend || !!moving || !hasStatus}
           onClick={() => move(locked ? "UNLOCK" : "LOCK")}
-          aria-label={locked ? "Abrir la puerta" : "Cerrar la puerta"}
+          aria-label={doorOpen ? "El seguro no se puede mover con la puerta abierta" : locked ? "Abrir la puerta" : "Cerrar la puerta"}
         >
           <svg viewBox="0 0 320 120">
             <rect className="stroke" x="216" y="22" width="100" height="76" fill="rgba(255,255,255,.03)" />
@@ -199,8 +226,9 @@ export default function Page() {
           </svg>
         </button>
         <div className="hint">
-          {moving ? "Un momento…" : canSend && hasStatus ? (locked ? "Toca la puerta para abrirla" : "Toca la puerta para cerrarla") : "Control no disponible por ahora"}
+          {moving ? "Un momento…" : canSend && hasStatus ? (doorOpen ? "Cierra la puerta para mover el seguro" : locked ? "Toca la puerta para abrir el seguro" : "Toca la puerta para cerrar el seguro") : "Control no disponible por ahora"}
         </div>
+        {notice && <div className="notice" role="alert">{notice}</div>}
       </section>
 
       <div className="section-title"><h2>Seguridad</h2><span className="mono">Última hora</span></div>

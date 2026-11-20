@@ -31,4 +31,6 @@ export type ServerMessage =
   | { kind: "status"; status: DeviceStatus }
   | { kind: "online"; online: boolean }
   | { kind: "event"; event: DeviceEvent }
-  | { kind: "broker"; connected: boolean };
+  | { kind: "broker"; connected: boolean }
+  /** The backend refused a LOCK/UNLOCK because the door is open (latch must not move). */
+  | { kind: "rejected"; action: LockCommand; reason: "door_open" };
