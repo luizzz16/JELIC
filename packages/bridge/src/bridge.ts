@@ -3,22 +3,33 @@ import type { Duplex } from "node:stream";
 import mqtt from "mqtt";
 import { WebSocketServer, WebSocket } from "ws";
 import { COMMANDS } from "@jelic/shared";
-import type { ClientMessage, DeviceEvent, DeviceStatus, ServerMessage } from "@jelic/shared";
+import type { ClientMessage, DeviceEvent, DeviceStatus, LockCommand, ServerMessage } from "@jelic/shared";
 import { config, topics } from "./config";
 import { parseEventPayload, parseOnline, parseStatus } from "./parse";
+import { CommandModel, EventModel, StatusLogModel, dbReady } from "./db";
+
+/** Guarda en Mongo sin bloquear el tiempo real; un fallo de BD nunca tumba el bridge. */
+function persist(p: Promise<unknown>) {
+  p.catch((e) => console.error("[db] error al guardar:", (e as Error).message));
+}
+
+export type CommandResult = { ok: boolean; reason?: "invalid" | "door_open" | "broker_down" };
 
 export interface Bridge {
   /** Call from an http server's "upgrade" event for the /ws path. */
   handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void;
-  health(): { ok: true; broker: boolean; online: boolean; status: DeviceStatus | null };
+  /** Envía un comando al ESP32 (misma validación que por WebSocket). */
+  sendCommand(action: string): CommandResult;
+  health(): { ok: true; broker: boolean; online: boolean; db: boolean; status: DeviceStatus | null };
   close(): void;
 }
 
-/** MQTT -> WebSocket fan-out. Keeps last status + recent events in memory (run a single instance). */
+/** MQTT -> WebSocket fan-out + persistencia en MongoDB. Keeps last status + recent events in memory (run a single instance). */
 export function createBridge(): Bridge {
   let status: DeviceStatus | null = null;
   let online = false;
   let brokerUp = false;
+  let lastStatusSave = 0;
   const events: DeviceEvent[] = [];
 
   const wss = new WebSocketServer({ noServer: true });
@@ -33,6 +44,28 @@ export function createBridge(): Bridge {
     reconnectPeriod: 3000,
   });
 
+  function sendCommand(action: string): CommandResult {
+    if (!COMMANDS.includes(action as LockCommand)) return { ok: false, reason: "invalid" };
+    const log = (accepted: boolean, reason?: string) => {
+      if (dbReady()) persist(CommandModel.create({ device: config.deviceId, action, accepted, reason }));
+    };
+    // El pestillo solo se mueve con la puerta cerrada (sensor magnético).
+    if ((action === "LOCK" || action === "UNLOCK") && status?.door === "open") {
+      console.warn(`[mqtt] ${action} rejected, door is open`);
+      log(false, "door_open");
+      return { ok: false, reason: "door_open" };
+    }
+    if (!brokerUp) {
+      console.warn("[mqtt] command dropped, broker down");
+      log(false, "broker_down");
+      return { ok: false, reason: "broker_down" };
+    }
+    client.publish(topics.command, action, { qos: 1 });
+    console.log(`[mqtt] command -> ${topics.command}: ${action}`);
+    log(true);
+    return { ok: true };
+  }
+
   wss.on("connection", (ws) => {
     send(ws, { kind: "snapshot", status, online, events, broker: brokerUp });
     ws.on("message", (data) => {
@@ -42,15 +75,9 @@ export function createBridge(): Bridge {
       } catch {
         return;
       }
-      if (msg.kind !== "command" || !COMMANDS.includes(msg.action)) return;
-      // El pestillo solo se mueve con la puerta cerrada (sensor magnético).
-      if ((msg.action === "LOCK" || msg.action === "UNLOCK") && status?.door === "open") {
-        send(ws, { kind: "rejected", action: msg.action, reason: "door_open" });
-        return console.warn(`[mqtt] ${msg.action} rejected, door is open`);
-      }
-      if (!brokerUp) return console.warn("[mqtt] command dropped, broker down");
-      client.publish(topics.command, msg.action, { qos: 1 });
-      console.log(`[mqtt] command -> ${topics.command}: ${msg.action}`);
+      if (msg.kind !== "command") return;
+      const r = sendCommand(msg.action);
+      if (r.reason === "door_open") send(ws, { kind: "rejected", action: msg.action, reason: "door_open" });
     });
   });
 
@@ -74,7 +101,14 @@ export function createBridge(): Bridge {
     if (topic === topics.status) {
       const s = parseStatus(payload);
       if (!s) return console.warn("[mqtt] bad status payload");
+      const changed =
+        !status || status.door !== s.door || status.latch !== s.latch || status.presence !== s.presence || status.alarm !== s.alarm;
       status = s;
+      // Se guarda solo si cambió algo relevante o pasó el intervalo (evita lecturas idénticas repetidas).
+      if (dbReady() && (changed || ts - lastStatusSave >= config.statusSaveMs)) {
+        lastStatusSave = ts;
+        persist(StatusLogModel.create({ ...s, device: s.device || config.deviceId, ts: new Date(ts) }));
+      }
       broadcast({ kind: "status", status: s });
     } else if (topic === topics.online) {
       online = parseOnline(payload);
@@ -85,6 +119,11 @@ export function createBridge(): Bridge {
       const event: DeviceEvent = { channel: topic === topics.alert ? "alert" : "event", ...p, ts };
       events.push(event);
       if (events.length > config.historyLimit) events.shift();
+      if (dbReady()) {
+        persist(
+          EventModel.create({ device: config.deviceId, channel: event.channel, type: event.type, detail: event.detail, ts: new Date(ts) }),
+        );
+      }
       broadcast({ kind: "event", event });
     }
   });
@@ -92,7 +131,8 @@ export function createBridge(): Bridge {
   return {
     handleUpgrade: (req, socket, head) =>
       wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req)),
-    health: () => ({ ok: true, broker: brokerUp, online, status }),
+    sendCommand,
+    health: () => ({ ok: true, broker: brokerUp, online, db: dbReady(), status }),
     close: () => {
       client.end(true);
       wss.close();

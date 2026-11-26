@@ -14,6 +14,11 @@ export const config = {
   mqttUsername: process.env.MQTT_USERNAME || undefined,
   mqttPassword: process.env.MQTT_PASSWORD || undefined,
   base,
+  deviceId: required("DEVICE_ID"),
+  statusSaveMs: 60_000,
+  corsOrigin: process.env.CORS_ORIGIN?.trim() || "*",
+  mongoUri: process.env.MONGODB_URI?.trim() || undefined,
+  mongoDb: process.env.MONGODB_DB?.trim() || "jelic",
   port: Number(process.env.PORT ?? 3000),
   historyLimit: 200,
 };

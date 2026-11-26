@@ -2,27 +2,8 @@
 import { useEffect, useMemo, useState } from "react";
 import type { LockCommand } from "@jelic/shared";
 import { useLock, type Link, type LogItem } from "../lib/useLock";
+import { EVENT_TEXT, type Tone } from "../lib/events";
 
-/* ---------- textos y clasificación de eventos del firmware ---------- */
-
-type Tone = "ok" | "warn" | "bad" | "info" | "idle";
-const EVENT_TEXT: Record<string, { title: string; tone: Tone }> = {
-  presence_detected: { title: "Persona detectada en el exterior", tone: "info" },
-  presence_cleared: { title: "Ya no hay presencia", tone: "idle" },
-  door_open: { title: "Puerta abierta", tone: "warn" },
-  door_closed: { title: "Puerta cerrada", tone: "ok" },
-  vibration: { title: "Golpe fuerte en la puerta", tone: "warn" },
-  door_forced: { title: "Puerta forzada", tone: "bad" },
-  tamper_vibration: { title: "Forcejeo en la puerta", tone: "bad" },
-  lock_rejected: { title: "Cierre rechazado: puerta abierta", tone: "warn" },
-  alarm_test: { title: "Prueba de alarma", tone: "info" },
-  alarm_silenced: { title: "Alarma silenciada", tone: "idle" },
-  latch_locking: { title: "Cerrando…", tone: "idle" },
-  latch_unlocking: { title: "Abriendo…", tone: "idle" },
-  latch_confirmed: { title: "Movimiento confirmado", tone: "ok" },
-  device_online: { title: "Dispositivo conectado", tone: "ok" },
-  cmd_rejected: { title: "Comando rechazado", tone: "warn" },
-};
 
 const KIND: Record<Tone, "secure" | "open" | "alert" | ""> = { ok: "secure", warn: "open", bad: "alert", info: "", idle: "" };
 const LOCK_EVENTS = new Set(["latch_locking", "latch_unlocking", "latch_confirmed", "lock_rejected", "cmd_rejected"]);
@@ -72,6 +53,7 @@ const ALERT_ROWS: { key: AlertKey; title: string; cls: string; icon: React.React
 
 const HOUR = 3600e3;
 const FIVE_MIN = 300e3;
+const PRESENCE_HOLD_MS = 4000;
 
 /* ---------- página ---------- */
 
@@ -134,6 +116,22 @@ export default function Page() {
   const fresh = (k: AlertKey, ms: number) => alertTimes[k].some((t) => now - t < ms && t > acked);
   const last = (k: AlertKey) => alertTimes[k][alertTimes[k].length - 1];
 
+  /* presencia: el PIR puede soltar la señal enseguida; la alerta se mantiene PRESENCE_HOLD_MS desde la detección */
+  const latestPresence = alertTimes.presencia[alertTimes.presencia.length - 1] ?? 0;
+  const [presUntil, setPresUntil] = useState(0);
+  const [presClock, setPresClock] = useState(0);
+  useEffect(() => {
+    const t = Date.now();
+    // Evento reciente (el reloj del evento es el del servidor) o lectura actual del PIR en alto.
+    const until = Math.max(status?.presence ? t + PRESENCE_HOLD_MS : 0, t - latestPresence < PRESENCE_HOLD_MS ? latestPresence + PRESENCE_HOLD_MS : 0);
+    if (until <= t) return;
+    setPresUntil((u) => Math.max(u, until));
+    setPresClock(t);
+    const id = setTimeout(() => setPresClock(Date.now()), until - t + 30);
+    return () => clearTimeout(id);
+  }, [status?.presence, latestPresence]);
+  const presenceActive = online && (!!status?.presence || presUntil > presClock);
+
   /* estado global de seguridad: una sola lectura clara */
   let sec: { cls: "" | "warn" | "alert"; icon: React.ReactNode; title: string; text: string } = {
     cls: "", icon: <IconCalm />, title: "Todo en calma", text: "Sin eventos sospechosos",
@@ -146,8 +144,7 @@ export default function Page() {
       title: alarmOn && !fresh("forcejeo", 120e3) ? "Alarma activa" : "Forcejeo detectado",
       text: last("forcejeo") ? `${ago(last("forcejeo"), now)}. La alarma puede estar sonando.` : "La alarma puede estar sonando.",
     };
-  } else if (online && status?.presence) {
-    /* solo el estado actual del PIR: presence_cleared del dispositivo lo apaga de inmediato */
+  } else if (presenceActive) {
     sec = { cls: "warn", icon: <IconUser />, title: "Alguien en la puerta", text: last("presencia") ? ago(last("presencia"), now) : "Hay alguien frente a la puerta" };
   } else if (online && doorOpen) {
     /* mientras el sensor magnético diga abierta (no solo los primeros 60 s) */
@@ -193,9 +190,11 @@ export default function Page() {
         <div className="brand">
           Jelic <span>Puerta principal</span>
         </div>
-        <div className={`chip ${lk.cls}`}><i /><span>{lk.label}</span></div>
+        <div className="head-right"><a className="navlink" href="/historial">Historial</a><div className={`chip ${lk.cls}`}><i /><span>{lk.label}</span></div></div>
       </header>
 
+      <div className="dash">
+      <div className="col">
       <section className="card hero">
         <div className="mono">Puerta</div>
         <h1>{word}</h1>
@@ -230,6 +229,20 @@ export default function Page() {
         </div>
         {notice && <div className="notice" role="alert">{notice}</div>}
       </section>
+
+      <div className="tiles">
+        <div className="tile"><span className="mono">Puerta</span><div className="v">{status ? (status.door === "open" ? "Abierta" : "Cerrada") : "—"}</div></div>
+        <div className="tile">
+          <span className="mono">Conexión</span>
+          <div className="v">
+            {status ? <>{signal}<span className="bars">{[0, 1, 2, 3].map((n) => <b key={n} className={n < bars ? "on" : ""} />)}</span></> : "—"}
+          </div>
+        </div>
+        <div className="tile"><span className="mono">Respaldo</span><div className="v">{status ? (status.sd ? "Activo" : "Inactivo") : "—"}</div></div>
+      </div>
+      </div>
+
+      <div className="col">
 
       <div className="section-title"><h2>Seguridad</h2><span className="mono">Última hora</span></div>
       <section className={`card status ${sec.cls}`}>
@@ -267,17 +280,6 @@ export default function Page() {
         })}
       </div>
 
-      <div className="tiles">
-        <div className="tile"><span className="mono">Puerta</span><div className="v">{status ? (status.door === "open" ? "Abierta" : "Cerrada") : "—"}</div></div>
-        <div className="tile">
-          <span className="mono">Conexión</span>
-          <div className="v">
-            {status ? <>{signal}<span className="bars">{[0, 1, 2, 3].map((n) => <b key={n} className={n < bars ? "on" : ""} />)}</span></> : "—"}
-          </div>
-        </div>
-        <div className="tile"><span className="mono">Respaldo</span><div className="v">{status ? (status.sd ? "Activo" : "Inactivo") : "—"}</div></div>
-      </div>
-
       <section className="log">
         <div className="section-title">
           <h2>Actividad</h2>
@@ -303,6 +305,8 @@ export default function Page() {
           <button className="more" onClick={() => setShowAll((v) => !v)}>{showAll ? "Ver menos" : `Ver todo (${groups.length})`}</button>
         )}
       </section>
+      </div>
+      </div>
     </main>
   );
 }
