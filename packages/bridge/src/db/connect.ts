@@ -1,5 +1,9 @@
+import dns from "node:dns";
 import mongoose from "mongoose";
 import { config } from "../config";
+
+// En algunos Windows Node no lee el DNS del sistema y queda en 127.0.0.1: falla la consulta SRV de mongodb+srv.
+if (dns.getServers().every((s) => s === "127.0.0.1" || s === "::1")) dns.setServers(["8.8.8.8", "1.1.1.1"]);
 
 /** Conecta a MongoDB Atlas. Si no hay MONGODB_URI, el sistema sigue funcionando sin persistencia. */
 export async function connectDb(): Promise<boolean> {
