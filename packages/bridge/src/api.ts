@@ -145,7 +145,7 @@ export function createApi(bridge: Bridge) {
     if (typeof action !== "string") return void res.status(400).json({ error: "action_required" });
     const r = bridge.sendCommand(action);
     if (r.ok) return void res.status(202).json({ accepted: true, action });
-    const code = r.reason === "invalid" ? 400 : r.reason === "door_open" ? 409 : 503;
+    const code = r.reason === "invalid" ? 400 : 503;
     res.status(code).json({ accepted: false, action, reason: r.reason });
   });
 

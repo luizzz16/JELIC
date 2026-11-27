@@ -6,16 +6,14 @@ import { EVENT_TEXT, type Tone } from "../lib/events";
 
 
 const KIND: Record<Tone, "secure" | "open" | "alert" | ""> = { ok: "secure", warn: "open", bad: "alert", info: "", idle: "" };
-const LOCK_EVENTS = new Set(["latch_locking", "latch_unlocking", "latch_confirmed", "lock_rejected", "cmd_rejected"]);
+const LOCK_EVENTS = new Set(["latch_locking", "latch_unlocking", "latch_confirmed", "cmd_rejected"]);
 /** Firmware answers a LOCK/UNLOCK with one of these once the servo finished (or refused). */
-const DONE = new Set(["latch_confirmed", "lock_rejected", "cmd_rejected"]);
+const DONE = new Set(["latch_confirmed", "cmd_rejected"]);
 const MOVE_TIMEOUT_MS = 5000;
-const DOOR_OPEN_MSG = "No se puede mover el seguro con la puerta abierta. Ciérrala primero.";
 
 type AlertKey = "forcejeo" | "presencia" | "puerta";
 const ALERT_OF: Record<string, AlertKey> = {
   tamper_vibration: "forcejeo",
-  door_forced: "forcejeo",
   vibration: "forcejeo",
   presence_detected: "presencia",
   door_open: "puerta",
@@ -58,7 +56,7 @@ const PRESENCE_HOLD_MS = 4000;
 /* ---------- página ---------- */
 
 export default function Page() {
-  const { status, online, link, log, sendCommand, rejection } = useLock();
+  const { status, online, link, log, sendCommand } = useLock();
   const [now, setNow] = useState(() => Date.now());
   const [filter, setFilter] = useState<"all" | "alert" | "lock">("all");
   const [showAll, setShowAll] = useState(false);
@@ -85,23 +83,8 @@ export default function Page() {
     return () => clearTimeout(t);
   }, [pending]);
   const move = (action: "LOCK" | "UNLOCK") => {
-    if (doorOpen) return setNotice(DOOR_OPEN_MSG); // el seguro solo se mueve con la puerta cerrada
     if (sendCommand(action)) setPending({ action, done: doneCount });
   };
-
-  /* aviso breve (p. ej. seguro bloqueado por puerta abierta) */
-  const [notice, setNotice] = useState<string | null>(null);
-  useEffect(() => {
-    if (!notice) return;
-    const t = setTimeout(() => setNotice(null), 4000);
-    return () => clearTimeout(t);
-  }, [notice]);
-  /* el servidor también puede rechazar el comando si la puerta se abrió justo antes */
-  useEffect(() => {
-    if (!rejection) return;
-    setPending(null);
-    setNotice(DOOR_OPEN_MSG);
-  }, [rejection]);
 
   /* alertas agrupadas por tipo (última hora) */
   const alertTimes = useMemo(() => {
@@ -202,11 +185,10 @@ export default function Page() {
 
         <button
           type="button"
-          className={doorOpen ? "plan blocked" : "plan"}
-          aria-disabled={doorOpen}
+          className="plan"
           disabled={!canSend || !!moving || !hasStatus}
           onClick={() => move(locked ? "UNLOCK" : "LOCK")}
-          aria-label={doorOpen ? "El seguro no se puede mover con la puerta abierta" : locked ? "Abrir la puerta" : "Cerrar la puerta"}
+          aria-label={locked ? "Abrir la puerta" : "Cerrar la puerta"}
         >
           <svg viewBox="0 0 320 120">
             <rect className="stroke" x="216" y="22" width="100" height="76" fill="rgba(255,255,255,.03)" />
@@ -225,9 +207,8 @@ export default function Page() {
           </svg>
         </button>
         <div className="hint">
-          {moving ? "Un momento…" : canSend && hasStatus ? (doorOpen ? "Cierra la puerta para mover el seguro" : locked ? "Toca la puerta para abrir el seguro" : "Toca la puerta para cerrar el seguro") : "Control no disponible por ahora"}
+          {moving ? "Un momento…" : canSend && hasStatus ? (locked ? "Toca la puerta para abrir el seguro" : "Toca la puerta para cerrar el seguro") : "Control no disponible por ahora"}
         </div>
-        {notice && <div className="notice" role="alert">{notice}</div>}
       </section>
 
       <div className="tiles">

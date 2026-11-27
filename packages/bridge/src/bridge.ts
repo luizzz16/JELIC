@@ -13,7 +13,7 @@ function persist(p: Promise<unknown>) {
   p.catch((e) => console.error("[db] error al guardar:", (e as Error).message));
 }
 
-export type CommandResult = { ok: boolean; reason?: "invalid" | "door_open" | "broker_down" };
+export type CommandResult = { ok: boolean; reason?: "invalid" | "broker_down" };
 
 export interface Bridge {
   /** Call from an http server's "upgrade" event for the /ws path. */
@@ -49,12 +49,6 @@ export function createBridge(): Bridge {
     const log = (accepted: boolean, reason?: string) => {
       if (dbReady()) persist(CommandModel.create({ device: config.deviceId, action, accepted, reason }));
     };
-    // El pestillo solo se mueve con la puerta cerrada (sensor magnético).
-    if ((action === "LOCK" || action === "UNLOCK") && status?.door === "open") {
-      console.warn(`[mqtt] ${action} rejected, door is open`);
-      log(false, "door_open");
-      return { ok: false, reason: "door_open" };
-    }
     if (!brokerUp) {
       console.warn("[mqtt] command dropped, broker down");
       log(false, "broker_down");
@@ -76,8 +70,7 @@ export function createBridge(): Bridge {
         return;
       }
       if (msg.kind !== "command") return;
-      const r = sendCommand(msg.action);
-      if (r.reason === "door_open") send(ws, { kind: "rejected", action: msg.action, reason: "door_open" });
+      sendCommand(msg.action);
     });
   });
 

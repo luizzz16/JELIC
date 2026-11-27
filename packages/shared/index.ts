@@ -13,7 +13,7 @@ export interface DeviceStatus {
 /** smartlock/<id>/event (info) and smartlock/<id>/alert (alarms). */
 export interface DeviceEvent {
   channel: "event" | "alert";
-  type: string; // presence_detected, door_open, vibration, door_forced, tamper_vibration, ...
+  type: string; // presence_detected, door_open, vibration, tamper_vibration, ...
   detail: string;
   ts: number; // server receive time (ms)
 }
@@ -31,6 +31,4 @@ export type ServerMessage =
   | { kind: "status"; status: DeviceStatus }
   | { kind: "online"; online: boolean }
   | { kind: "event"; event: DeviceEvent }
-  | { kind: "broker"; connected: boolean }
-  /** The backend refused a LOCK/UNLOCK because the door is open (latch must not move). */
-  | { kind: "rejected"; action: LockCommand; reason: "door_open" };
+  | { kind: "broker"; connected: boolean };
